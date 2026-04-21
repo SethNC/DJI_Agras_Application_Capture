@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spray Drone Coverage Polygon Visualizer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap');
+        
+        body { font-family: 'Inter', system_ui, sans-serif; margin:0; padding:0; background:#f8f9fa; color:#222; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        header { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); padding: 20px 24px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 15px; }
+        h1 { margin: 0; font-size: 1.75rem; font-weight: 600; }
+        .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .file-input-wrapper { position: relative; }
+        .upload-btn { background: #00c853; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+        #fileInput { position: absolute; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+        .status { padding: 10px 18px; background: #e8f5e9; color: #2e7d32; border-radius: 8px; font-weight: 500; display: none; align-items: center; gap: 8px; }
+        .map-container { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; margin-bottom: 20px; }
+        #map { height: 650px; width: 100%; }
+        .footer-bar { background: white; border-radius: 12px; padding: 16px 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+        .legend { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+        .legend-color { width: 20px; height: 12px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.1); }
+        button { background: #111; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .btn-secondary { background: #f1f3f4; color: #444; }
+        .file-list { font-size: 0.85rem; color: #666; max-width: 600px; }
+        .info-box { background: #f1f8ff; border-left: 5px solid #2196f3; padding: 12px 16px; border-radius: 6px; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🌾 Spray Drone Coverage Polygon Visualizer</h1>
+                <p class="subtitle">Multiple CSVs • Minimum 4 ft spray blocks • GPA in GeoJSON</p>
+            </div>
+            
+            <div class="controls">
+                <div class="file-input-wrapper">
+                    <button class="upload-btn" id="uploadButton">📤 Select CSV Files (up to 10)</button>
+                    <input type="file" id="fileInput" accept=".csv" multiple>
+                </div>
+                
+                <button id="processButton" style="display:none; background:#00c853;">
+                    🚁 Process All Selected Files
+                </button>
+            </div>
+        </header>
+
+        <div class="info-box">
+            <strong>Minimum spray block size:</strong> Only segments ≥ 4 feet (~1.22 m) are converted to polygons.<br>
+            Short segments (turns, starts/stops, GPS noise) are now skipped for cleaner output.<br>
+            <strong>application_rate_gpa</strong> is included in the GeoJSON.
+        </div>
+
+        <div class="map-container">
+            <div id="map"></div>
+        </div>
+
+        <div class="footer-bar">
+            <div>
+                <div class="data-summary" id="summary">No files selected yet.</div>
+                <div id="fileList" class="file-list"></div>
+            </div>
+            
+            <div class="legend" id="legend" style="display:none;">
+                <div><strong>GPA (gal/acre)</strong></div>
+                <div class="legend-item"><div class="legend-color" style="background:#4ade80;"></div>Low</div>
+                <div class="legend-item"><div class="legend-color" style="background:#facc15;"></div>Medium</div>
+                <div class="legend-item"><div class="legend-color" style="background:#fb923c;"></div>High</div>
+                <div class="legend-item"><div class="legend-color" style="background:#ef4444;"></div>Very High</div>
+            </div>
+
+            <div style="display:flex; gap:12px;">
+                <button id="downloadGeoJSON" style="display:none;">⬇️ Download GeoJSON</button>
+                <button id="clearButton" class="btn-secondary" style="display:none;">Clear Map</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let map, geojsonLayer = null, currentGeoJSON = null;
+        let selectedFiles = [];
+
+        const LITERS_TO_GALLONS = 0.264172;
+        const SQ_M_TO_ACRE = 4046.8564224;
+        const MIN_LENGTH_FEET = 4;
+        const MIN_LENGTH_METERS = MIN_LENGTH_FEET * 0.3048; // ≈ 1.2192 m
+
+        function initMap() {
+            map = L.map('map').setView([35.636, -80.672], 16);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+            
+            L.control.layers({
+                "Street": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'),
+                "Satellite": L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}')
+            }).addTo(map);
+        }
+
+        function haversineDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // meters
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        async function parseCSV(file) {
+            const text = await file.text();
+            const lines = text.trim().split(/\r?\n/);
+            if (lines.length < 2) return [];
+            const headers = lines[0].split(',').map(h => h.trim());
+            const data = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                const values = lines[i].split(',').map(v => v.trim());
+                const row = {};
+                headers.forEach((h, idx) => row[h] = values[idx]);
+                if (row.Latitude && row.Longitude) data.push(row);
+            }
+            return data;
+        }
+
+        function calculateGPA(flowLMin, speedMs, spacingM) {
+            const flow = parseFloat(flowLMin) || 0;
+            const speed = parseFloat(speedMs) || 0;
+            const spacing = parseFloat(spacingM) || 6;
+            if (speed <= 0 || spacing <= 0) return 0;
+            const gpm = flow * LITERS_TO_GALLONS;
+            const areaM2PerMin = speed * spacing * 60;
+            return parseFloat((gpm / areaM2PerMin * SQ_M_TO_ACRE).toFixed(2));
+        }
+
+        function getColor(gpa) {
+            const n = Math.max(0, Math.min(gpa / 30, 1));
+            const hue = (1 - n) * 110;
+            return `hsl(${hue}, 95%, 55%)`;
+        }
+
+        function createCoveragePolygon(row1, row2, spacing) {
+            const lat1 = parseFloat(row1.Latitude), lon1 = parseFloat(row1.Longitude);
+            const lat2 = parseFloat(row2.Latitude), lon2 = parseFloat(row2.Longitude);
+            if (isNaN(lat1)||isNaN(lon1)||isNaN(lat2)||isNaN(lon2)) return null;
+
+            // NEW: Filter by minimum length (4 feet)
+            const lengthMeters = haversineDistance(lat1, lon1, lat2, lon2);
+            if (lengthMeters < MIN_LENGTH_METERS) {
+                return null;   // skip short segments
+            }
+
+            const half = (parseFloat(spacing) || 6) / 2;
+            const dx = lon2 - lon1, dy = lat2 - lat1;
+            const len = Math.sqrt(dx*dx + dy*dy);
+            if (len === 0) return null;
+
+            const m2d = 1 / 111000;
+            const px = -dy / len * half * m2d;
+            const py =  dx / len * half * m2d;
+
+            return [[lon1-px, lat1-py], [lon2-px, lat2-py], [lon2+px, lat2+py], [lon1+px, lat1+py], [lon1-px, lat1-py]];
+        }
+
+        function createGeoJSONFromRows(rows, filename) {
+            const features = [];
+            let skipped = 0;
+
+            for (let i = 0; i < rows.length - 1; i++) {
+                const r1 = rows[i], r2 = rows[i + 1];
+                const spacing = parseFloat(r2.Route_Spacing_m || r1.Route_Spacing_m) || 6;
+                const speed = parseFloat(r2['Task_Speed_m/s'] || r1['Task_Speed_m/s']) || 0;
+                const flow = parseFloat(r2.Spray_Flow_Rate_L_per_min || r1.Spray_Flow_Rate_L_per_min) || 0;
+
+                const gpa = calculateGPA(flow, speed, spacing);
+                const poly = createCoveragePolygon(r1, r2, spacing);
+
+                if (!poly) {
+                    skipped++;
+                    continue;
+                }
+
+                features.push({
+                    type: "Feature",
+                    geometry: { type: "Polygon", coordinates: [poly] },
+                    properties: {
+                        timestamp: r2.Timestamp || r1.Timestamp,
+                        aircraft: r2.Aircraft || r1.Aircraft || "Unknown",
+                        team: r2.Team_Name || r1.Team_Name || "Unknown",
+                        speed_m_s: parseFloat(speed.toFixed(2)),
+                        route_spacing_m: parseFloat(spacing.toFixed(2)),
+                        spray_flow_l_per_min: parseFloat(flow.toFixed(2)),
+                        application_rate_gpa: gpa,
+                        source_file: filename,
+                        segment_index: i
+                    }
+                });
+            }
+            console.log(`File ${filename}: ${features.length} polygons created, ${skipped} short segments skipped`);
+            return features;
+        }
+
+        async function processFiles() {
+            if (selectedFiles.length === 0) {
+                alert("Please select at least one CSV file.");
+                return;
+            }
+
+            const statusEl = document.getElementById('status') || document.createElement('div');
+            statusEl.id = 'status'; statusEl.className = 'status';
+            document.querySelector('.controls').appendChild(statusEl);
+            statusEl.style.display = 'flex';
+
+            let allFeatures = [];
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                statusEl.innerHTML = `Processing ${i+1}/${selectedFiles.length}: ${file.name}`;
+                try {
+                    const rows = await parseCSV(file);
+                    const features = createGeoJSONFromRows(rows, file.name);
+                    allFeatures.push(...features);
+                } catch (e) {
+                    console.error(`Failed processing ${file.name}`, e);
+                }
+            }
+
+            statusEl.style.display = 'none';
+
+            currentGeoJSON = {
+                type: "FeatureCollection",
+                features: allFeatures,
+                properties: {
+                    generated_at: new Date().toISOString(),
+                    total_files: selectedFiles.length,
+                    total_polygons: allFeatures.length,
+                    min_block_size_feet: 4,
+                    description: "Spray drone coverage polygons (minimum 4 ft length) with application_rate_gpa"
+                }
+            };
+
+            renderMap();
+
+            document.getElementById('summary').innerHTML = `<strong>✅ Done!</strong> ${selectedFiles.length} files → ${allFeatures.length} polygons (short segments skipped)`;
+            document.getElementById('fileList').innerHTML = `<strong>Files:</strong> ${selectedFiles.map(f => f.name).join(' • ')}`;
+            document.getElementById('downloadGeoJSON').style.display = 'inline-flex';
+            document.getElementById('clearButton').style.display = 'inline-flex';
+            document.getElementById('legend').style.display = 'flex';
+        }
+
+        function renderMap() {
+            if (geojsonLayer) map.removeLayer(geojsonLayer);
+            if (!currentGeoJSON?.features?.length) return;
+
+            geojsonLayer = L.geoJSON(currentGeoJSON, {
+                style: f => ({
+                    fillColor: getColor(f.properties.application_rate_gpa),
+                    color: '#1f2937',
+                    weight: 1.5,
+                    fillOpacity: 0.78
+                }),
+                onEachFeature: (feature, layer) => {
+                    const p = feature.properties;
+                    layer.bindPopup(`
+                        <strong>${p.aircraft} — ${p.team}</strong><br>
+                        <strong>GPA:</strong> ${p.application_rate_gpa} gal/acre<br>
+                        Speed: ${p.speed_m_s} m/s | Swath: ${p.route_spacing_m} m<br>
+                        Flow: ${p.spray_flow_l_per_min} L/min<br>
+                        <small>${p.source_file}</small>
+                    `);
+                }
+            }).addTo(map);
+
+            map.fitBounds(geojsonLayer.getBounds(), { padding: [50, 50] });
+        }
+
+        function downloadGeoJSON() {
+            if (!currentGeoJSON) return;
+            const blob = new Blob([JSON.stringify(currentGeoJSON, null, 2)], {type: 'application/geo+json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `drone-coverage-gpa_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.geojson`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function clearAll() {
+            if (geojsonLayer) map.removeLayer(geojsonLayer);
+            currentGeoJSON = null;
+            selectedFiles = [];
+            document.getElementById('summary').innerHTML = 'No files processed.';
+            document.getElementById('fileList').innerHTML = '';
+            document.getElementById('downloadGeoJSON').style.display = 'none';
+            document.getElementById('clearButton').style.display = 'none';
+            document.getElementById('legend').style.display = 'none';
+            map.setView([35.636, -80.672], 16);
+        }
+
+        function initializeApp() {
+            initMap();
+            const fileInput = document.getElementById('fileInput');
+            const uploadButton = document.getElementById('uploadButton');
+            const processButton = document.getElementById('processButton');
+
+            uploadButton.addEventListener('click', () => fileInput.click());
+
+            fileInput.addEventListener('change', (e) => {
+                selectedFiles = Array.from(e.target.files);
+                if (selectedFiles.length > 10) selectedFiles = selectedFiles.slice(0, 10);
+                
+                document.getElementById('summary').innerHTML = `${selectedFiles.length} file(s) selected.<br>Click "Process All Selected Files" to continue.`;
+                processButton.style.display = 'inline-flex';
+                processButton.textContent = `🚁 Process ${selectedFiles.length} File${selectedFiles.length > 1 ? 's' : ''}`;
+            });
+
+            processButton.addEventListener('click', processFiles);
+            document.getElementById('downloadGeoJSON').addEventListener('click', downloadGeoJSON);
+            document.getElementById('clearButton').addEventListener('click', clearAll);
+        }
+
+        window.onload = initializeApp;
+    </script>
+</body>
+</html>
