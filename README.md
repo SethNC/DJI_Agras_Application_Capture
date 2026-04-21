@@ -1,4 +1,4 @@
-# DJI Agras Flight Data Recorder & As Applied Generator
+# DJI Agras Flight Data Recorder & Spray Drone Coverage Polygon Visualizer
 
 A lightweight browser console script that captures per-second flight telemetry from the **DJI Agras SmartFarm web replay** page when official export options are limited or unavailable.
 
@@ -163,4 +163,122 @@ Timestamp is system time, not the original GPS flight time.
 Only captures data visible on the current web replay page.
 Hidden telemetry (tank level, altitude, nozzle RPM, battery, true GPS timestamps, etc.) is not available with this method.
 
-For richer data, consider KML export from SmartFarm.
+# Spray Drone Coverage Polygon Visualizer
+
+A browser-based tool that converts **DJI Agras spray drone flight logs** (CSV format) into **realistic coverage polygons** with **Gallons Per Acre (GPA)** application rates for visualization on an interactive Leaflet map.
+
+## Features
+
+- Supports **up to 10 CSV files** at once (multiple aircraft or flights)
+- Creates **coverage polygons** representing the actual sprayed swath (path + route spacing)
+- Filters out short segments — **minimum spray block size: 4 feet** (~1.22 m)
+- Calculates and displays **application rate in Gallons Per Acre (GPA)**
+- Colors polygons based on GPA intensity (green = low, red = high)
+- Exports a clean **GeoJSON** file with all data including `application_rate_gpa`
+- Works entirely in the browser — no installation required
+
+## How to Use
+
+### 1. Save the Tool
+
+1. Copy the entire HTML code from the previous message.
+2. Paste it into a new file and save it as:
+spray-drone-coverage-visualizer.html
+text### 2. Open the Tool
+
+- Double-click the saved `.html` file to open it in any modern web browser (Chrome, Edge, or Firefox recommended).
+- The map will load centered near Lenoir, NC (you can pan and zoom freely).
+
+### 3. Upload Your Flight Logs
+
+1. Click the button **"📤 Select CSV Files (up to 10)"**
+2. Select one or more of your DJI Agras CSV flight log files.
+- You can select multiple files at once by holding `Ctrl` (Windows) or `Cmd` (Mac) while clicking.
+3. Click the **"🚁 Process All Selected Files"** button that appears.
+
+The tool will:
+- Parse all selected CSV files
+- Skip very short segments (< 4 feet)
+- Generate coverage polygons
+- Color them by application rate (GPA)
+- Fit the map to your data
+
+### 4. Explore the Results
+
+- **Hover or click** any polygon to see detailed information:
+- Aircraft name
+- Team
+- GPA (gallons per acre)
+- Speed (m/s)
+- Swath width (m)
+- Flow rate (L/min)
+- Source file
+
+- Use the layer control in the top-right to switch between **Street Map** and **Satellite** view.
+
+### 5. Download GeoJSON
+
+- Click **"⬇️ Download GeoJSON"** to save the processed data.
+- The downloaded file (`drone-coverage-gpa_....geojson`) can be opened in:
+- QGIS
+- ArcGIS
+- Google Earth
+- Any other GIS software that supports GeoJSON
+
+## CSV Requirements
+
+Your CSV files should contain these columns (exact names matter):
+
+- `Timestamp`
+- `Latitude`
+- `Longitude`
+- `Spray_Flow_Rate_L_per_min`
+- `Route_Spacing_m`
+- `Task_Speed_m/s`
+- `Aircraft` (optional)
+- `Team_Name` (optional)
+
+## Output GeoJSON Properties
+
+Each polygon feature includes:
+
+- `application_rate_gpa` ← **Gallons per acre**
+- `speed_m_s`
+- `route_spacing_m`
+- `spray_flow_l_per_min`
+- `aircraft`
+- `team`
+- `timestamp`
+- `source_file`
+
+## Tips for Best Results
+
+- Use files from the same flight or mission for best visual alignment.
+- The 4-foot minimum length helps remove noise from turns and GPS jitter.
+- For very large datasets, processing may take a few seconds.
+- You can combine data from **Maxine**, **Jenny**, and other aircraft in one map.
+
+## Troubleshooting
+
+**Multiple files not working?**
+- Make sure you click **"Process All Selected Files"** after selecting the files.
+- Try selecting fewer files first to test.
+
+**No polygons appear?**
+- Check the browser console (F12 → Console tab) for messages.
+- Ensure your CSV has valid Latitude/Longitude values.
+
+**Map looks off?**
+- Click "Clear Map" and try processing again.
+
+## Technical Notes
+
+- Built with **Leaflet.js** for mapping
+- All calculations performed client-side (no data leaves your computer)
+- GPA formula uses standard conversion: liters → gallons and m² → acres
+- Polygon buffering approximates swath width using perpendicular offsets
+
+---
+
+**Created for NCWolfpack**  
+For visualizing DJI Agras spray drone application coverage with accurate GPA rates.
