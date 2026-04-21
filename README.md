@@ -1,4 +1,4 @@
-# DJI Agras Flight Data Recorder
+# DJI Agras Flight Data Recorder & As Applied Generator
 
 A lightweight browser console script that captures per-second flight telemetry from the **DJI Agras SmartFarm web replay** page when official export options are limited or unavailable.
 
